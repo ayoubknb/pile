@@ -374,7 +374,7 @@ function solveReach(nums,opsCount){
 
 /* ================== PARTIE ================== */
 let R=null, screen='menu';
-const ui={bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
+const ui={sellConfirm:null,bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
 
 function newRun(){
   R={uid:0,nums:[],ops:[],relics:[],gold:4,manche:1,won:false,lastResult:null,
@@ -557,6 +557,14 @@ function makeTileOffer(){
     case 'big':{const v=10+Math.floor(Math.random()*10);return {k,v,name:'Tuile '+v,desc:'Une grosse tuile pour ton sac',price:5}}
   }
 }
+function sellPrice(id){const r=RELICS.find(x=>x.id===id);return Math.max(1,Math.floor(r.price/2))}
+function sellRelic(id){
+  if(!has(id))return;
+  if(ui.sellConfirm!==id){ui.sellConfirm=id;render();return}
+  const r=RELICS.find(x=>x.id===id),sp=sellPrice(id);
+  R.relics=R.relics.filter(x=>x!==id);R.gold+=sp;ui.sellConfirm=null;
+  flash(r.name+' vendu : +'+sp+(sp>1?' boulons':' boulon'));tock(990,.12,.09);tock(660,.18,.08,.07);render();
+}
 function buyRelic(i){
   const o=R.shop.relics[i],r=RELICS.find(x=>x.id===o.id);
   if(o.sold)return;if(R.relics.length>=5){flash('5 reliques maximum.');return}
@@ -656,6 +664,29 @@ function coins(n){return `<span class="coins">${nutSVG()}<span class="num-font">
 function pips(n,max,cls){let h='';for(let i=0;i<max;i++)h+=`<span class="pip ${cls||''} ${i<n?'':'off'}"></span>`;return `<span class="pips">${h}</span>`}
 
 let afterRender=[];
+/* ================== SAUVEGARDE DE LA PARTIE ================== */
+const RUN_KEY='pile_run_v1';
+function saveRun(){
+  try{
+    if(!R||!['game','shop','victory'].includes(screen))return;
+    localStorage.setItem(RUN_KEY,JSON.stringify({screen,R}));
+  }catch(e){}
+}
+function clearRun(){try{localStorage.removeItem(RUN_KEY)}catch(e){}}
+function savedRun(){try{const s=localStorage.getItem(RUN_KEY);return s?JSON.parse(s):null}catch(e){return null}}
+function resumeRun(){
+  const d=savedRun();if(!d||!d.R){flash('Aucune partie à reprendre.');return}
+  const r=d.R,map=new Map();
+  r.nums.forEach(t=>map.set(t.id,t));r.ops.forEach(t=>map.set(t.id,t));
+  const relink=a=>(a||[]).map(t=>map.get(t.id)||t);
+  ['handN','handO','numPile','opPile','numDisc','opDisc'].forEach(k=>r[k]=relink(r[k]));
+  r.expr=(r.expr||[]).map(t=>t.t==='num'?Object.assign(t,{tile:map.get(t.id)||t.tile}):t);
+  if(r.pending)r.pending.fxDone=true;
+  R=r;screen=d.screen;
+  Object.assign(ui,{bag:false,confirmAbandon:false,sellConfirm:null,anim:null,fresh:false,newTarget:false,bossIntro:false});
+  render();
+}
+
 function render(){
   let h='';
   if(screen==='menu')h=vMenu();
@@ -667,13 +698,14 @@ function render(){
   else if(screen==='victory')h=vVictory();
   if(ui.bag&&R)h+=vBag();
   $app.innerHTML=h;
+  if(screen==='over')clearRun();else saveRun();
   const cbs=afterRender;afterRender=[];cbs.forEach(f=>f());
 }
 function vMenu(){
   const nd=Object.keys(META.disc).length;
   return `<div class="title-wrap">${gearsSVG()}</div><div class="title"><h1>PILE</h1><div class="sub">LE COMPTE EST BON, EN ROGUELIKE</div></div>
   <div class="menu">
-    <button class="btn primary" data-a="new">Nouvelle partie</button>
+    ${(()=>{const d=savedRun();return d&&d.R?`<button class="btn primary" data-a="resume">Continuer · manche ${d.R.manche}</button><button class="btn" data-a="new">Nouvelle partie</button>`:`<button class="btn primary" data-a="new">Nouvelle partie</button>`})()}
     <button class="btn" data-a="codex">Carnet · ${nd}/${PROPS.length} propriétés</button>
     <button class="btn" data-a="rules">Règles</button>
     <button class="btn small" data-a="mute">${MUTED?'Son coupé':'Son activé'}</button>
@@ -800,7 +832,7 @@ function vShop(){
     <div class="offer"><div class="name">Retirer une tuile</div><div class="desc">Enlève une tuile de ton sac pour de bon.</div><button class="btn" data-a="remove">3 boulons</button></div>
     <div class="offer"><div class="name">Relancer</div><div class="desc">Nouvelles reliques et nouvelles tuiles.</div><button class="btn" data-a="reroll">2 boulons</button></div>
   </div>
-  ${R.relics.length?`<h2>Tes reliques</h2><div class="relics">${R.relics.map(id=>{const x=RELICS.find(y=>y.id===id);return `<button class="chip" data-a="relic" data-id="${id}">${x.name}</button>`}).join('')}</div>`:''}
+  ${R.relics.length?`<h2>Tes reliques <span class="small" style="font-family:var(--mono)">(revente à moitié prix)</span></h2><div class="offers">${R.relics.map(id=>{const x=RELICS.find(y=>y.id===id),sp=sellPrice(id),c=ui.sellConfirm===id;return `<div class="offer"><div class="icon">${relicIcon()}</div><div class="name">${x.name}</div><div class="desc">${x.desc}</div><button class="btn${c?' primary':''}" data-a="sell" data-id="${id}">${c?'Sûr ?':'Vendre +'+sp}</button></div>`}).join('')}</div>`:''}
   <div class="foot"><button class="btn small" data-a="bag">Voir le sac</button><button class="btn small" data-a="codex">Carnet</button></div>
   <button class="btn primary wide" style="margin-top:22px;padding:15px;font-size:20px" data-a="next">Manche ${R.manche+1} →</button>`;
 }
@@ -873,8 +905,10 @@ $app.addEventListener('click',e=>{
   const el=e.target.closest('[data-a]');if(!el)return;
   const a=el.dataset.a,id=el.dataset.id;
   if(a!=='abandon')ui.confirmAbandon=false;
+  if(a!=='sell')ui.sellConfirm=null;
   switch(a){
     case 'new':audio();newRun();break;
+    case 'resume':audio();resumeRun();break;
     case 'tomenu':R=null;screen='menu';render();break;
     case 'codex':if(screen!=='codex'&&screen!=='rules')ui.back=screen;screen='codex';render();break;
     case 'rules':if(screen!=='codex'&&screen!=='rules')ui.back=screen;screen='rules';render();break;
@@ -894,6 +928,7 @@ $app.addEventListener('click',e=>{
     case 'bag':ui.bag='view';render();break;
     case 'closebag':ui.bag=false;render();break;
     case 'relic':{const r=RELICS.find(x=>x.id===id);if(r)flash(r.name+' : '+r.desc);break}
+    case 'sell':sellRelic(id);break;
     case 'buyR':buyRelic(+el.dataset.i);tock(880,.15,.1);tock(1320,.2,.08,.08);break;
     case 'buyT':buyTile(+el.dataset.i);tock(880,.15,.1);tock(1320,.2,.08,.08);break;
     case 'reroll':if(R.gold<2){flash('Pas assez de boulons.');break}R.gold-=2;R.shop={relics:rollRelics(),tiles:rollTiles()};render();break;
