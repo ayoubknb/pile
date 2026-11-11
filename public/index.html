@@ -204,6 +204,13 @@ h2{font-family:var(--hand);font-size:24px;color:var(--ink);margin:22px 0 10px;fo
 .rules p{margin:0 0 12px}
 .rules b{font-family:var(--hand);font-size:18px;color:var(--ink);font-weight:400}
 /* ---------- toast ---------- */
+.coach{position:fixed;z-index:65;left:12px;top:12px;width:min(370px,calc(100vw - 24px));background:var(--paper2);border:2.5px solid var(--ink);border-radius:6px;box-shadow:5px 5px 0 var(--ink);padding:14px 14px 12px;font-size:15.5px;line-height:1.5;color:#22304a;display:none}
+.coach.on{display:block}
+.coach b{color:var(--ink)}
+.coach .cbtns{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px}
+.coach .cstep{position:absolute;top:6px;right:10px;font-family:var(--mono);font-size:11px;color:var(--pencil)}
+.coach .wait{font-family:var(--hand);color:var(--red);font-size:15px}
+.coach-hl{position:relative;z-index:40;box-shadow:0 0 0 4px var(--hl),0 0 0 9999px rgba(20,30,60,.42)!important;border-radius:6px}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(10px) rotate(-1deg);background:var(--hl);color:var(--ink);padding:10px 18px;font-family:var(--hand);font-size:16px;max-width:90vw;z-index:70;opacity:0;transition:all .25s;pointer-events:none;box-shadow:0 8px 20px rgba(20,30,60,.25)}
 .toast.on{opacity:1;transform:translateX(-50%) rotate(-1deg)}
 @media (max-width:430px){
@@ -218,6 +225,7 @@ h2{font-family:var(--hand);font-size:24px;color:var(--ink);margin:22px 0 10px;fo
 <body>
 <div id="app"></div>
 <div class="toast" id="toast"></div>
+<div class="coach" id="coach" role="dialog" aria-live="polite"></div>
 <script>
 "use strict";
 /* ================== MATHS ================== */
@@ -303,7 +311,7 @@ function seuil(m){return m<=12?THRESH[m-1]:Math.round(2900*Math.pow(1.45,m-12)/1
 
 /* ================== SAUVEGARDE ================== */
 let META={disc:{},unl:{},best:{manche:0,coup:0}};
-try{const s=localStorage.getItem('pile_meta_v1');if(s){const o=JSON.parse(s);META={disc:o.disc||{},unl:o.unl||{},best:Object.assign({manche:0,coup:0},o.best||{})}}}catch(e){}
+try{const s=localStorage.getItem('pile_meta_v1');if(s){const o=JSON.parse(s);META={disc:o.disc||{},unl:o.unl||{},best:Object.assign({manche:0,coup:0},o.best||{}),tutoSeen:!!o.tutoSeen}}}catch(e){}
 function saveMeta(){try{localStorage.setItem('pile_meta_v1',JSON.stringify(META))}catch(e){}}
 function relicUnlocked(id){const r=RELICS.find(x=>x.id===id);return !!r&&(r.start||!!META.unl[id])}
 
@@ -374,7 +382,7 @@ function solveReach(nums,opsCount){
 
 /* ================== PARTIE ================== */
 let R=null, screen='menu';
-const ui={sellConfirm:null,bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
+const ui={tuto:null,sellConfirm:null,bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
 
 function newRun(){
   R={uid:0,nums:[],ops:[],relics:[],gold:4,manche:1,won:false,lastResult:null,
@@ -700,12 +708,14 @@ function render(){
   $app.innerHTML=h;
   if(screen==='over')clearRun();else saveRun();
   const cbs=afterRender;afterRender=[];cbs.forEach(f=>f());
+  tutoUpdate();
 }
 function vMenu(){
   const nd=Object.keys(META.disc).length;
   return `<div class="title-wrap">${gearsSVG()}</div><div class="title"><h1>PILE</h1><div class="sub">LE COMPTE EST BON, EN ROGUELIKE</div></div>
   <div class="menu">
     ${(()=>{const d=savedRun();return d&&d.R?`<button class="btn primary" data-a="resume">Continuer · manche ${d.R.manche}</button><button class="btn" data-a="new">Nouvelle partie</button>`:`<button class="btn primary" data-a="new">Nouvelle partie</button>`})()}
+    <button class="btn" data-a="tuto">${META.tutoSeen?'Tuto (1 min)':'Nouveau ? Fais le tuto (1 min)'}</button>
     <button class="btn" data-a="codex">Carnet · ${nd}/${PROPS.length} propriétés</button>
     <button class="btn" data-a="rules">Règles</button>
     <button class="btn small" data-a="mute">${MUTED?'Son coupé':'Son activé'}</button>
@@ -881,7 +891,8 @@ function vRules(){
   <p><b>Entre les manches.</b> À l'atelier, dépense tes boulons en reliques, en tuiles spéciales, ou retire les tuiles inutiles de ton sac. Toutes les 3 manches, un boss change les règles.</p>
   <p><b>Clavier.</b> Chiffres, + − * /, parenthèses, Retour arrière, Entrée pour valider.</p>
   <p style="margin:0;color:var(--red);font-family:var(--hand);font-size:17px">Les « ??? » se débloquent en jouant. Personne ne te dira comment.</p>
-  </div>`;
+  </div>
+  <button class="btn primary wide" style="margin-top:18px" data-a="tuto">Lancer le tuto (1 min)</button>`;
 }
 function vOver(){
   const manque=Math.max(0,R.seuil-R.score);
@@ -897,6 +908,69 @@ function vVictory(){
   <div class="menu"><button class="btn primary" data-a="endless">Continuer en mode infini</button><button class="btn" data-a="tomenu">Menu</button></div>`;
 }
 
+/* ================== TUTO ================== */
+function exprIs(v,n){if(!R)return false;const x=evaluate(R.expr);return !!x&&x.d===1&&x.n===v&&R.expr.filter(t=>t.t==='num').length>=n}
+const TUTO=[
+ {sel:null,t:"<b>Bienvenue dans Pile !</b><br>Un petit tour d'une minute pour comprendre le jeu. Tu joues pour de vrai : à la fin, la partie continue.",btn:"C'est parti"},
+ {sel:'.medal',t:"Voici la <b>cible</b>. À chaque coup, tu écris un calcul avec tes tuiles pour tomber pile dessus, ou le plus près possible.",btn:'Suivant'},
+ {sel:'#bar',t:"Le but d'une manche : atteindre ce <b>score</b> (ici 100) en 3 coups maximum. Sinon, c'est perdu.",btn:'Suivant'},
+ {sel:'.row',pos:'top',t:"Essaie : touche <b>7</b>, puis <b>×</b>, puis <b>3</b>.",cond:()=>exprIs(21,2)},
+ {sel:'.estim',t:"7 × 3 = 21, pile sur la cible ! Avant de valider, tu vois ton score : <b>Base × Multi</b>. La Base, c'est la somme des chiffres utilisés : ici 7 + 3 = 10.",btn:'Suivant'},
+ {sel:'.row',pos:'top',t:"Le secret : <b>plus ton calcul est long, plus la Base est grosse</b>. Efface avec ⌫ (ou touche les tuiles dans la zone de calcul), puis écris <b>9 + 7 + 5</b>.",cond:()=>exprIs(21,3)},
+ {sel:'.estim',t:"Même résultat, mais la Base passe à 21 : le score double ! Les étiquettes surlignées sont les <b>bonus</b> : tomber pile, et la nature du nombre obtenu (premier, carré…). Les <b>???</b> sont des bonus que tu n'as pas encore découverts.",btn:'Suivant'},
+ {sel:'.tools',t:"Les <b>parenthèses</b> servent à grouper, par exemple (5 + 4) × 2. Le bouton ⌫ efface la dernière tuile posée.",btn:'Suivant'},
+ {sel:'[data-a=disc]',t:"<b>Gommer</b> : si ta main ne te plaît pas, pose les tuiles à jeter dans la zone de calcul, puis touche Gommer. Elles sont remplacées par d'autres. Tu as 2 gommes par manche.",btn:'Suivant'},
+ {sel:'[data-a=play]',pos:'top',t:"Remets <b>9 + 7 + 5</b> si tu l'as effacé, puis touche <b>Valider le plan</b>.",cond:()=>!R.pending&&(screen!=='game'||R.coups<3)},
+ {sel:'#bar',t:"Pas encore assez de points : joue un autre coup pour atteindre le score de la manche.",cond:()=>screen!=='game',skipIf:()=>screen!=='game'},
+ {sel:'.offers',t:"Manche réussie ! Bienvenue à <b>l'atelier</b>. Tes <b>boulons</b> servent à acheter des <b>reliques</b> (bonus permanents, 5 maximum, revendables à moitié prix) et des tuiles spéciales pour ton sac.",btn:'Suivant',skipIf:()=>screen!=='shop'},
+ {sel:'[data-a=next]',t:"Dernière chose : toutes les 3 manches, un <b>boss</b> change les règles. Le <b>carnet</b> garde tout ce que tu découvres. Il faut 12 manches pour gagner. Bonne partie !",btn:'Terminer',skipIf:()=>screen!=='shop'},
+];
+function startTuto(){
+  newRun();
+  const take=(arr,pred)=>{const i=arr.findIndex(pred);return i>=0?arr.splice(i,1)[0]:null};
+  R.numPile.push(...R.handN);R.opPile.push(...R.handO);R.handN=[];R.handO=[];
+  for(const v of [2,3,5,7,7,9]){const t=take(R.numPile,x=>x.v===v);if(t)R.handN.push(t)}
+  for(const o of ['+','+','×']){const t=take(R.opPile,x=>x.op===o);if(t)R.handO.push(t)}
+  R.numPile=shuffle(R.numPile);R.opPile=shuffle(R.opPile);
+  R.handN.sort((a,b)=>a.v-b.v);R.target=21;R.expr=[];ui.bossIntro=false;
+  ui.tuto={i:0,scrolled:-1};render();
+}
+function endTuto(){ui.tuto=null;META.tutoSeen=true;saveMeta();document.querySelectorAll('.coach-hl').forEach(e=>e.classList.remove('coach-hl'));document.getElementById('coach').classList.remove('on')}
+function tutoUpdate(){
+  const box=document.getElementById('coach');if(!box)return;
+  document.querySelectorAll('.coach-hl').forEach(e=>e.classList.remove('coach-hl'));
+  if(!ui.tuto){box.classList.remove('on');return}
+  if(!R||screen==='over'||screen==='menu'||screen==='victory'){endTuto();return}
+  let guard=0;
+  while(guard++<20){const st=TUTO[ui.tuto.i];if(!st){endTuto();return}
+    if(st.skipIf&&st.skipIf()){ui.tuto.i++;continue}
+    if(st.cond&&st.cond()){ui.tuto.i++;continue}
+    break}
+  const st=TUTO[ui.tuto.i];
+  if(R.pending||ui.bag||ui.bossIntro||screen==='codex'||screen==='rules'){box.classList.remove('on');return}
+  const el=st.sel?document.querySelector(st.sel):null;
+  if(el)el.classList.add('coach-hl');
+  box.innerHTML=`<div class="cstep">${ui.tuto.i+1}/${TUTO.length}</div><div class="ctext">${st.t}</div><div class="cbtns"><button data-t="skip" class="btn small">Passer le tuto</button>${st.btn?`<button data-t="next" class="btn small primary">${st.btn}</button>`:'<span class="wait">à toi de jouer…</span>'}</div>`;
+  box.classList.add('on');
+  if(ui.tuto.scrolled!==ui.tuto.i){ui.tuto.scrolled=ui.tuto.i;if(st.pos==='top'){const z=document.querySelector('.actions')||el;if(z)z.scrollIntoView({block:'end',behavior:'smooth'})}else if(el)el.scrollIntoView({block:'center',behavior:'smooth'});else window.scrollTo({top:0,behavior:'smooth'});setTimeout(tutoPlace,450)}
+  tutoPlace();
+}
+function tutoPlace(){
+  const box=document.getElementById('coach');if(!box||!box.classList.contains('on'))return;
+  const el=document.querySelector('.coach-hl'),bw=box.offsetWidth,bh=box.offsetHeight,vw=innerWidth,vh=innerHeight;let top,left;
+  const st=ui.tuto&&TUTO[ui.tuto.i];
+  if(st&&st.pos==='top'){box.style.top='10px';box.style.left=((vw-bw)/2)+'px';return}
+  if(el){const r=el.getBoundingClientRect();
+    if(vh-r.bottom>bh+18)top=r.bottom+14;else if(r.top>bh+18)top=r.top-bh-14;else top=vh-bh-12;
+    left=Math.min(vw-bw-12,Math.max(12,r.left+r.width/2-bw/2))}
+  else{top=Math.max(12,vh/2-bh/2);left=(vw-bw)/2}
+  box.style.top=top+'px';box.style.left=left+'px';
+}
+addEventListener('scroll',tutoPlace,{passive:true});addEventListener('resize',tutoPlace);
+document.getElementById('coach').addEventListener('click',e=>{const b=e.target.closest('[data-t]');if(!b||!ui.tuto)return;
+  if(b.dataset.t==='skip'){endTuto();return}
+  if(b.dataset.t==='next'){ui.tuto.i++;if(ui.tuto.i>=TUTO.length){endTuto();return}tutoUpdate()}});
+
 /* ================== ACTIONS ================== */
 function addNum(id){const t=R.handN.find(x=>x.id===id);if(!t||isFrozen(t)||R.expr.some(x=>x.id===id))return;R.expr.push({t:'num',v:t.v,id,tile:t});ui.fresh=true;tock(1100+t.v*40,0.07,0.1);render()}
 function addOp(id){const t=R.handO.find(x=>x.id===id);if(!t||isFrozen(t)||R.expr.some(x=>x.id===id))return;R.expr.push({t:'op',op:t.op,id});ui.fresh=true;tock(760,0.08,0.1);render()}
@@ -909,6 +983,7 @@ $app.addEventListener('click',e=>{
   switch(a){
     case 'new':audio();newRun();break;
     case 'resume':audio();resumeRun();break;
+    case 'tuto':audio();startTuto();break;
     case 'tomenu':R=null;screen='menu';render();break;
     case 'codex':if(screen!=='codex'&&screen!=='rules')ui.back=screen;screen='codex';render();break;
     case 'rules':if(screen!=='codex'&&screen!=='rules')ui.back=screen;screen='rules';render();break;
