@@ -374,7 +374,7 @@ function solveReach(nums,opsCount){
 
 /* ================== PARTIE ================== */
 let R=null, screen='menu';
-const ui={bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
+const ui={bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
 
 function newRun(){
   R={uid:0,nums:[],ops:[],relics:[],gold:4,manche:1,won:false,lastResult:null,
@@ -397,12 +397,18 @@ function refill(){
   while(R.handO.length<handSizeO()){const t=drawFrom('opPile','opDisc');if(!t)break;R.handO.push(t)}
   if(R.boss==='impairs'){ // garantit au moins 2 tuiles jouables
     const pool=()=>[...R.numPile,...R.numDisc].filter(t=>t.v%2===0);
-    while(R.handN.filter(t=>t.v%2===0).length<2&&pool().length){
+    while(R.handN.filter(t=>t.v%2===0).length<Math.min(4,R.handN.length)&&pool().length){
       const ev=pool()[0],oddI=R.handN.findIndex(t=>t.v%2===1);if(oddI<0)break;
       const odd=R.handN[oddI];
       for(const k of ['numPile','numDisc']){const j=R[k].indexOf(ev);if(j>=0){R[k][j]=odd;break}}
       R.handN[oddI]=ev;
     }
+  }
+  // garantit au moins un × jouable : sans lui, la cible ne peut pas monter
+  if(!R.handO.some(t=>t.op==='×'&&!isFrozen(t))){
+    for(const k of ['opPile','opDisc']){const j=R[k].findIndex(t=>t.op==='×');if(j<0)continue;
+      let i=R.handO.findIndex(t=>t.op==='−'||t.op==='÷');if(i<0)i=R.handO.findIndex(t=>isFrozen(t));if(i<0)i=R.handO.length-1;if(i<0)break;
+      const x=R[k][j];R[k][j]=R.handO[i];R.handO[i]=x;break}
   }
   R.handN.sort((a,b)=>a.v-b.v);
   R.handO.sort((a,b)=>OPK.indexOf(a.op)-OPK.indexOf(b.op));
@@ -418,6 +424,7 @@ function startManche(){
   R.ms={square:false,cube:false,fib:0};
   META.best.manche=Math.max(META.best.manche,m);saveMeta();
   refill();newTarget();
+  ui.bossIntro=!!R.boss;
   const un=checkUnlocks({props:[],numCount:0});
   screen='game';ui.confirmAbandon=false;render();
   if(un.length)flash('Débloqué : '+un.map(u=>u.name).join(', '));
@@ -430,8 +437,7 @@ function newTarget(){
   const need=Math.min(3,nums.length);
   let c=reach.filter(([v,b])=>v>=lo&&v<=hi&&b>=need);
   if(!c.length)c=reach.filter(([v])=>v>=lo&&v<=hi);
-  if(!c.length)c=reach.filter(([v])=>v>=lo);
-  if(!c.length)c=reach;
+  if(!c.length){const dist=v=>v<lo?lo-v:v>hi?v-hi:0;c=reach.slice().sort((a,b)=>dist(a[0])-dist(b[0])).slice(0,3)}
   R.target=c.length?pick(c)[0]:lo;
   ui.newTarget=true;
 }
@@ -743,7 +749,10 @@ function vGame(){
     <button class="btn small" data-a="mute">${MUTED?'Son coupé':'Son'}</button>
     <button class="btn small" data-a="abandon">${ui.confirmAbandon?'Sûr ? Re-touche':'Abandonner'}</button>
   </div>
-  ${R.pending?vResult():''}`;
+  ${R.pending?vResult():''}
+  ${ui.bossIntro&&!R.pending?`<div class="modal"><div class="card" style="text-align:center"><div class="stamp" style="position:static;display:inline-block;opacity:.95;animation:none;transform:rotate(-4deg);margin-bottom:12px">BOSS</div>
+    <div class="rexpr">${BOSSES[R.boss].name}</div><p style="font-size:16px;line-height:1.5;margin:8px 0 16px">${BOSSES[R.boss].desc}<br><span class="small">Cette règle ne dure que pour la manche ${R.manche}.</span></p>
+    <button class="btn primary wide" data-a="bossok">Compris</button></div></div>`:''}`;
 }
 function animScore(from,to){
   const bar=document.querySelector('#bar>i'),num=document.getElementById('scoreNum');if(!bar||!num)return;
@@ -881,6 +890,7 @@ $app.addEventListener('click',e=>{
     case 'play':play();break;
     case 'disc':discard();tock(330,0.12,0.08);break;
     case 'cont':cont();break;
+    case 'bossok':ui.bossIntro=false;render();break;
     case 'bag':ui.bag='view';render();break;
     case 'closebag':ui.bag=false;render();break;
     case 'relic':{const r=RELICS.find(x=>x.id===id);if(r)flash(r.name+' : '+r.desc);break}
@@ -896,6 +906,7 @@ $app.addEventListener('click',e=>{
 });
 document.addEventListener('keydown',e=>{
   if(screen!=='game'||!R||ui.bag)return;
+  if(ui.bossIntro){if(e.key==='Enter'||e.key===' '){e.preventDefault();ui.bossIntro=false;render()}return}
   if(R.pending){if(e.key==='Enter'||e.key===' '){e.preventDefault();cont()}return}
   const k=e.key;
   if(/^[1-9]$/.test(k)){const t=R.handN.find(x=>x.v===+k&&!isFrozen(x)&&!R.expr.some(y=>y.id===x.id));if(t)addNum(t.id);return}
