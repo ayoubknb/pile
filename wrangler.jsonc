@@ -1,7 +1,15 @@
 {
   "name": "pile",
+  "main": "src/worker.js",
   "compatibility_date": "2026-11-01",
   "assets": {
-    "directory": "./public"
-  }
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "BOARD", "class_name": "Board" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Board"] }
+  ]
 }

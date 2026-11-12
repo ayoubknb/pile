@@ -204,6 +204,20 @@ h2{font-family:var(--hand);font-size:24px;color:var(--ink);margin:22px 0 10px;fo
 .rules p{margin:0 0 12px}
 .rules b{font-family:var(--hand);font-size:18px;color:var(--ink);font-weight:400}
 /* ---------- toast ---------- */
+.plabel{display:block;font-family:var(--hand);font-size:18px;margin:18px 0 6px}
+.pinput{width:100%;font-family:var(--hand);font-size:22px;color:var(--ink);background:var(--paper2);border:2.4px solid var(--ink);border-radius:4px;padding:10px 12px;box-shadow:3px 3px 0 rgba(27,59,134,.25);outline:none}
+.pinput:focus{box-shadow:3px 3px 0 var(--ink)}
+.dtimer{font-family:var(--mono);font-size:30px;color:var(--ink);border:2.4px solid var(--ink);padding:0 10px;border-radius:4px;background:var(--paper2)}
+.dtimer.low{color:var(--red);border-color:var(--red);animation:tick 1s infinite}
+@keyframes tick{50%{transform:scale(1.06)}}
+.board{padding:8px 12px 8px 46px}
+.brow{display:flex;align-items:baseline;gap:10px;padding:6px 2px;border-bottom:1px dashed rgba(27,59,134,.2);font-size:15px}
+.brow:last-child{border-bottom:0}
+.brow .rk{font-family:var(--mono);width:24px;color:var(--pencil)}
+.brow .ps{flex:1;font-family:var(--hand);font-size:18px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brow .ln{font-size:12px;color:var(--pencil)}
+.brow .sc{font-family:var(--hand);font-size:20px;color:var(--red)}
+.brow.me{background:linear-gradient(transparent 10%,rgba(255,227,110,.7) 10%,rgba(255,227,110,.7) 90%,transparent 90%)}
 .coach{position:fixed;z-index:65;left:12px;top:12px;width:min(370px,calc(100vw - 24px));background:var(--paper2);border:2.5px solid var(--ink);border-radius:6px;box-shadow:5px 5px 0 var(--ink);padding:14px 14px 12px;font-size:15.5px;line-height:1.5;color:#22304a;display:none}
 .coach.on{display:block}
 .coach b{color:var(--ink)}
@@ -228,6 +242,117 @@ h2{font-family:var(--hand);font-size:24px;color:var(--ink);margin:22px 0 10px;fo
 <div class="coach" id="coach" role="dialog" aria-live="polite"></div>
 <script>
 "use strict";
+/* ===== PileShared : code identique côté jeu et côté serveur ===== */
+const PileShared=(()=>{
+  const LIMIT=180000;
+  const EPOCH=Date.UTC(2026,10,12);
+  function dayKey(d){
+    const p=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d||new Date());
+    const g=t=>p.find(x=>x.type===t).value;return g('year')+'-'+g('month')+'-'+g('day');
+  }
+  function dayNum(k){const [y,m,d]=k.split('-').map(Number);return Math.round((Date.UTC(y,m-1,d)-EPOCH)/864e5)+1}
+  function hashStr(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+  function rng(seed){let a=seed>>>0;return()=>{a=(a+0x6D2B79F5)>>>0;let t=a;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296}}
+  function makeDaily(k){
+    const r=rng(hashStr('pile-daily-'+k));
+    const pickI=n=>Math.floor(r()*n);
+    for(let round=0;round<50;round++){
+      const nums=[];for(let i=0;i<6;i++)nums.push(1+pickI(9));
+      const ops=['×','×'];const pool=['+','+','−','÷','×'];for(let i=0;i<3;i++)ops.push(pool[pickI(pool.length)]);
+      for(let tries=0;tries<200;tries++){
+        const cnt=4+pickI(2);
+        const idx=[0,1,2,3,4,5];for(let i=5;i>0;i--){const j=pickI(i+1);const x=idx[i];idx[i]=idx[j];idx[j]=x}
+        let vals=idx.slice(0,cnt).map(i=>nums[i]);const left=ops.slice();let ok=true;
+        while(vals.length>1){
+          const i=pickI(vals.length);let j=pickI(vals.length-1);if(j>=i)j++;
+          const oi=pickI(left.length),op=left.splice(oi,1)[0];
+          const a=vals[i],b=vals[j];let v;
+          if(op==='+')v=a+b;else if(op==='×')v=a*b;else if(op==='−'){if(a===b){ok=false;break}v=Math.abs(a-b)}
+          else{const hi=Math.max(a,b),lo=Math.min(a,b);if(hi%lo!==0||lo===1){ok=false;break}v=hi/lo}
+          vals=vals.filter((_,q)=>q!==i&&q!==j);vals.push(v);
+        }
+        if(!ok)continue;const t=vals[0];
+        if(t>=100&&t<=999){
+          const ORD=['+','−','×','÷'];
+          return {k,num:dayNum(k),nums:nums.slice().sort((x,y)=>x-y),ops:ops.slice().sort((x,y)=>ORD.indexOf(x)-ORD.indexOf(y)),target:t};
+        }
+      }
+    }
+    return {k,num:dayNum(k),nums:[2,3,4,7,7,8],ops:['+','−','×','×','÷'],target:392};
+  }
+  /* calcul exact en fractions */
+  function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){const t=a%b;a=b;b=t}return a}
+  function F(n,d){if(d===undefined)d=1;if(d<0){n=-n;d=-d}const g=gcd(n,d)||1;const o={n:n/g,d:d/g};if(Math.abs(o.n)>1e13||o.d>1e13)throw 'big';return o}
+  const add=(a,b)=>F(a.n*b.d+b.n*a.d,a.d*b.d),sub=(a,b)=>F(a.n*b.d-b.n*a.d,a.d*b.d),mul=(a,b)=>F(a.n*b.n,a.d*b.d),div=(a,b)=>{if(b.n===0)throw 'div0';return F(a.n*b.d,a.d*b.n)};
+  function evalTokens(tokens){
+    let i=0;const pk=()=>tokens[i];const isOp=(t,l)=>t&&t.t==='op'&&l.includes(t.op);
+    function expr(){let v=term();while(isOp(pk(),['+','−'])){const o=tokens[i++].op,r=term();v=o==='+'?add(v,r):sub(v,r)}return v}
+    function term(){let v=factor();while(isOp(pk(),['×','÷'])){const o=tokens[i++].op,r=factor();v=o==='×'?mul(v,r):div(v,r)}return v}
+    function factor(){let v=prim();while(isOp(pk(),['²','³'])){const o=tokens[i++].op;v=o==='²'?mul(v,v):mul(mul(v,v),v)}return v}
+    function prim(){const t=tokens[i];if(!t)throw 'eof';if(t.t==='num'){i++;return F(t.v)}if(t.t==='('){i++;const v=expr();if(!tokens[i]||tokens[i].t!==')')throw 'par';i++;return v}throw 'tok'}
+    try{if(!tokens.length)return null;const v=expr();return i===tokens.length?v:null}catch(e){return null}
+  }
+  /* propriétés (sans reliques) */
+  const isPrime=n=>{if(n<2)return false;if(n%2===0)return n===2;for(let i=3;i*i<=n;i+=2)if(n%i===0)return false;return true};
+  const isSq=n=>{const r=Math.round(Math.sqrt(n));return r*r===n},isCu=n=>{const r=Math.round(Math.cbrt(n));return r*r*r===n};
+  const isTri=n=>{const k=Math.round((Math.sqrt(8*n+1)-1)/2);return k*(k+1)/2===n};
+  const FIB=new Set();{let a=1,b=2;while(a<1e12){FIB.add(a);const c=a+b;a=b;b=c}}
+  const isHappy=n=>{const s=new Set();while(n!==1&&!s.has(n)){s.add(n);n=String(n).split('').reduce((t,d)=>t+d*d,0)}return n===1};
+  const isPal=n=>{const s=String(n);return s.length>1&&s===s.split('').reverse().join('')};
+  const isPow2=n=>{if(n<2)return false;while(n%2===0)n/=2;return n===1};
+  const KAP=new Set([9,45,55,99,297,703,999,2223,2728,4879,4950,5050,5292,7272,7777,9999]),FACT=new Set([6,24,120,720,5040,40320]),PERF=new Set([6,28,496,8128]);
+  const PROPS=[
+    {id:'premier',tier:'commun',add:2,test:n=>isPrime(n)},
+    {id:'jumeaux',tier:'commun',add:3,test:n=>isPrime(n)&&(isPrime(n-2)||isPrime(n+2))},
+    {id:'sexy',tier:'commun',add:3,test:n=>isPrime(n)&&(isPrime(n-6)||isPrime(n+6))},
+    {id:'triangulaire',tier:'commun',add:2,test:n=>n>=3&&isTri(n)},
+    {id:'fibonacci',tier:'commun',add:2,test:n=>n>=2&&FIB.has(n)},
+    {id:'puiss2',tier:'commun',add:2,test:n=>isPow2(n)},
+    {id:'heureux',tier:'commun',add:2,test:n=>n>1&&isHappy(n)},
+    {id:'dizaine',tier:'commun',add:1,test:n=>n%10===0},
+    {id:'carre',tier:'rare',add:4,test:n=>n>=4&&isSq(n)},
+    {id:'cube',tier:'rare',add:6,test:n=>n>=8&&isCu(n)},
+    {id:'factorielle',tier:'rare',add:6,test:n=>FACT.has(n)},
+    {id:'kaprekar',tier:'rare',add:8,test:n=>KAP.has(n)},
+    {id:'parfait',tier:'legendaire',mul:3,test:n=>PERF.has(n)},
+    {id:'taxi',tier:'legendaire',mul:17,test:n=>n===1729},
+    {id:'palindrome',tier:'commun',fin:2,test:n=>isPal(n)},
+  ];
+  function scoreDaily(n,digits,target){
+    const steps=[];const base=digits.reduce((s,v)=>s+v,0);
+    steps.push({k:'base',l:'Tuiles jouées',v:'+'+base,short:true});
+    let multi=1;const e=Math.abs(n-target);
+    if(e===0){multi+=3;steps.push({k:'add',l:'Pile !',v:'+3'})}
+    else if(e===1){multi+=2;steps.push({k:'add',l:'À 1 près',v:'+2'})}
+    else if(e<=3){multi+=1;steps.push({k:'add',l:'À '+e+' près',v:'+1'})}
+    const props=digits.length>=2?PROPS.filter(p=>p.test(n)):[];
+    if(digits.length<2)steps.push({k:'info',l:'Un seul chiffre joué',v:'—'});
+    for(const p of props)if(p.add){multi+=p.add;steps.push({k:'add',pid:p.id,tier:p.tier,v:'+'+p.add})}
+    for(const p of props)if(p.mul){multi*=p.mul;steps.push({k:'mul',pid:p.id,tier:p.tier,v:'×'+p.mul})}
+    multi=Math.round(multi*100)/100;
+    let total=base*multi;
+    if(e>10){total*=0.5;steps.push({k:'fin',l:'Hors cible',v:'×0,5'})}
+    if(props.some(p=>p.id==='palindrome')){total*=2;steps.push({k:'fin',pid:'palindrome',tier:'commun',v:'×2'})}
+    return {base,multi,total:Math.floor(total),steps,props:props.map(p=>p.id)};
+  }
+  /* reconstruit une expression à partir des index de tuiles du défi */
+  function buildFromIdx(P,raw){
+    if(!Array.isArray(raw)||raw.length>40)return null;
+    const usedN=new Set(),usedO=new Set(),toks=[],digits=[];
+    for(const t of raw){
+      if(!t||typeof t!=='object')return null;
+      if(t.t==='('||t.t===')'){toks.push({t:t.t});continue}
+      const i=t.i|0;
+      if(t.t==='num'){if(i<0||i>=P.nums.length||usedN.has(i))return null;usedN.add(i);toks.push({t:'num',v:P.nums[i]});digits.push(P.nums[i]);continue}
+      if(t.t==='op'){if(i<0||i>=P.ops.length||usedO.has(i))return null;usedO.add(i);toks.push({t:'op',op:P.ops[i]});continue}
+      return null;
+    }
+    return {toks,digits};
+  }
+  function toStr(toks){return toks.map(t=>t.t==='num'?t.v:t.t==='op'?' '+t.op+' ':t.t).join('').replace(/\( /g,'(').replace(/ \)/g,')')}
+  return {LIMIT,dayKey,dayNum,makeDaily,evalTokens,scoreDaily,buildFromIdx,toStr};
+})();
+
 /* ================== MATHS ================== */
 function isPrime(n){if(n<2)return false;if(n%2===0)return n===2;for(let i=3;i*i<=n;i+=2)if(n%i===0)return false;return true}
 function isSquare(n){const r=Math.round(Math.sqrt(n));return r*r===n}
@@ -382,7 +507,7 @@ function solveReach(nums,opsCount){
 
 /* ================== PARTIE ================== */
 let R=null, screen='menu';
-const ui={tuto:null,sellConfirm:null,bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
+const ui={dconfirm:false,tuto:null,sellConfirm:null,bossIntro:false,bag:false,codexTab:'props',back:'menu',confirmAbandon:false,fresh:false,anim:null,newTarget:false};
 
 function newRun(){
   R={uid:0,nums:[],ops:[],relics:[],gold:4,manche:1,won:false,lastResult:null,
@@ -698,6 +823,7 @@ function resumeRun(){
 function render(){
   let h='';
   if(screen==='menu')h=vMenu();
+  else if(screen==='daily')h=vDaily();
   else if(screen==='game')h=vGame();
   else if(screen==='shop')h=vShop();
   else if(screen==='codex')h=vCodex();
@@ -715,6 +841,7 @@ function vMenu(){
   return `<div class="title-wrap">${gearsSVG()}</div><div class="title"><h1>PILE</h1><div class="sub">LE COMPTE EST BON, EN ROGUELIKE</div></div>
   <div class="menu">
     ${(()=>{const d=savedRun();return d&&d.R?`<button class="btn primary" data-a="resume">Continuer · manche ${d.R.manche}</button><button class="btn" data-a="new">Nouvelle partie</button>`:`<button class="btn primary" data-a="new">Nouvelle partie</button>`})()}
+    <button class="btn" data-a="daily">Défi du jour #${PileShared.dayNum(PileShared.dayKey())}${dailyDoneToday()?' ✓':''}</button>
     <button class="btn" data-a="tuto">${META.tutoSeen?'Tuto (1 min)':'Nouveau ? Fais le tuto (1 min)'}</button>
     <button class="btn" data-a="codex">Carnet · ${nd}/${PROPS.length} propriétés</button>
     <button class="btn" data-a="rules">Règles</button>
@@ -908,6 +1035,154 @@ function vVictory(){
   <div class="menu"><button class="btn primary" data-a="endless">Continuer en mode infini</button><button class="btn" data-a="tomenu">Menu</button></div>`;
 }
 
+/* ================== DÉFI DU JOUR ================== */
+let D=null,dTick=null;
+const escH=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function devId(){try{let d=localStorage.getItem('pile_dev');if(!d){d=Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem('pile_dev',d)}return d}catch(e){return 'a1b2c3d4e5f60718'}}
+function getPseudo(){try{return localStorage.getItem('pile_pseudo')||''}catch(e){return ''}}
+const dStoreKey=k=>'pile_daily_'+k;
+function dailySave(){try{localStorage.setItem(dStoreKey(D.k),JSON.stringify({t0:D.t0,offset:D.offset,best:D.best,plays:D.plays,done:D.done,online:D.online,rank:D.rank,total:D.total}))}catch(e){}}
+function dailyDoneToday(){try{const s=localStorage.getItem(dStoreKey(PileShared.dayKey()));if(!s)return false;const o=JSON.parse(s);return !!(o.done||(o.t0&&Date.now()+(o.offset||0)-o.t0>PileShared.LIMIT))}catch(e){return false}}
+async function api(path,body){
+  const r=await fetch(path,body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{});
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok){const er=new Error(j.error||'Erreur');er.data=j;throw er}
+  return j;
+}
+function openDaily(){
+  const k=PileShared.dayKey(),P=PileShared.makeDaily(k);
+  D={k,P,expr:[],t0:null,offset:0,best:null,plays:[],done:false,online:true,board:null,boardErr:false,phase:'intro',rank:null,total:null};
+  try{const s=localStorage.getItem(dStoreKey(k));if(s)Object.assign(D,JSON.parse(s))}catch(e){}
+  D.expr=[];ui.dconfirm=false;
+  if(D.done||(D.t0&&dailyLeft()<=0)){D.done=true;D.phase='end'}else if(D.t0)D.phase='play';
+  screen='daily';window.scrollTo(0,0);render();loadBoard();if(D.phase==='play')startTick();
+}
+function dailyLeft(){return PileShared.LIMIT-(Date.now()+D.offset-D.t0)}
+function fmtTime(ms){ms=Math.max(0,ms);const s=Math.ceil(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+async function loadBoard(){
+  try{D.board=await api('/api/daily/board?day='+D.k+'&dev='+devId());D.boardErr=false;if(D.board.rank){D.rank=D.board.rank;D.total=D.board.total}}
+  catch(e){D.boardErr=true}
+  if(screen==='daily'&&D.phase!=='play')render();
+}
+async function dailyStart(){
+  const inp=document.getElementById('pseudo');
+  const ps=(inp?inp.value:'').replace(/[^\p{L}\p{N} _\-.]/gu,'').trim().slice(0,16);
+  if(ps.length<2){flash('Choisis un pseudo (2 caractères minimum).');return}
+  try{localStorage.setItem('pile_pseudo',ps)}catch(e){}
+  try{const r=await api('/api/daily/start',{dev:devId(),pseudo:ps});D.t0=r.t0;D.offset=r.now-Date.now();D.online=true}
+  catch(e){D.t0=Date.now();D.offset=0;D.online=false}
+  if(dailyLeft()<=0){dailyFinish();return}
+  D.phase='play';dailySave();render();startTick();tock(660,.1,.08);tock(990,.15,.08,.1);
+}
+function startTick(){
+  clearInterval(dTick);
+  dTick=setInterval(()=>{
+    if(screen!=='daily'||!D||D.phase!=='play'){clearInterval(dTick);return}
+    const l=dailyLeft(),el=document.getElementById('dtimer');
+    if(el){el.textContent=fmtTime(l);el.classList.toggle('low',l<30000)}
+    if(l<=0)dailyFinish();
+  },250);
+}
+function dailyFinish(){clearInterval(dTick);D.phase='end';D.done=true;ui.dconfirm=false;dailySave();render();setTimeout(loadBoard,500)}
+function dToks(){return D.expr.map(t=>t.t==='num'?{t:'num',v:D.P.nums[t.i],i:t.i}:t.t==='op'?{t:'op',op:D.P.ops[t.i],i:t.i}:{t:t.t})}
+function dailyPlay(){
+  if(dailyLeft()<=0){dailyFinish();return}
+  const toks=dToks(),v=PileShared.evalTokens(toks);
+  if(!v||v.d!==1||v.n<=0){flash('Il faut un calcul complet qui donne un entier positif.');return}
+  const digits=toks.filter(t=>t.t==='num').map(t=>t.v);
+  const sc=PileShared.scoreDaily(v.n,digits,D.P.target);
+  sc.props.forEach(id=>META.disc[id]=true);saveMeta();
+  const str=PileShared.toStr(toks)+' = '+v.n,ms=Date.now()+D.offset-D.t0;
+  D.plays.unshift({score:sc.total,str});D.plays=D.plays.slice(0,6);
+  const better=!D.best||sc.total>D.best.score;
+  if(better)D.best={score:sc.total,str,len:digits.length,ms};
+  const send=D.expr.map(t=>t.t==='num'||t.t==='op'?{t:t.t,i:t.i}:{t:t.t});
+  D.expr=[];dailySave();render();
+  flash((better?'Nouveau record : ':'')+fmt(sc.total)+' points');
+  tock(880,.12,.09);
+  if(better){tock(1320,.2,.08,.08);const el=document.getElementById('dbest');if(el){const r=el.getBoundingClientRect();burst(r.left+r.width/2,r.top+r.height/2,36,false)}}
+  if(D.online)api('/api/daily/play',{dev:devId(),day:D.k,tokens:send})
+    .then(r=>{if(r.rank){D.rank=r.rank;D.total=r.total;dailySave()}})
+    .catch(e=>{if(e.data&&e.data.over)dailyFinish()});
+}
+function dAdd(tok){if(D.phase!=='play')return;if((tok.t==='num'||tok.t==='op')&&D.expr.some(x=>x.t===tok.t&&x.i===tok.i))return;D.expr.push(tok);ui.fresh=true;tock(tok.t==='num'?1100+D.P.nums[tok.i]*40:tok.t==='op'?760:640,.07,.1);render()}
+function dailyEstim(n){
+  const toks=dToks(),digits=toks.filter(t=>t.t==='num').map(t=>t.v),c=PileShared.scoreDaily(n,digits,D.P.target),ch=[];
+  const nameOf=id=>{const p=PROPS.find(x=>x.id===id);return META.disc[id]&&p?p.name:'???'};
+  for(const s of c.steps){
+    if(s.short){ch.push(`<span class="bchip base">${c.base} tuiles</span>`);continue}
+    const nm=s.pid?nameOf(s.pid):s.l,my=nm==='???'?' myst':'';
+    if(s.k==='add')ch.push(`<span class="bchip${my}">${s.v} ${nm}</span>`);
+    else if(s.k==='mul')ch.push(`<span class="bchip mul${my}">${s.v} ${nm}</span>`);
+    else if(s.k==='fin')ch.push(`<span class="bchip ${s.l==='Hors cible'?'neg':'mul'}${my}">${s.v} ${nm}</span>`);
+    else if(s.k==='info')ch.push(`<span class="bchip neg">1 seul chiffre : pas de bonus de nombre</span>`);
+  }
+  const fin=c.steps.filter(s=>s.k==='fin').map(s=>' '+s.v).join('');
+  return `<div class="estim"><div class="line"><span>Base ${fmt(c.base)}</span><span>×</span><span>Multi ${fmtM(c.multi)}</span>${fin?`<span>${fin}</span>`:''}<span>=</span><span class="tot num-font">${fmt(c.total)}</span></div><div class="chips">${ch.join('')}</div></div>`;
+}
+function boardHTML(){
+  if(D.boardErr)return `<p class="small center" style="margin-top:14px">Le classement en ligne n'est pas disponible ici. Il fonctionne sur pile.ayoubgames.com.</p>`;
+  if(!D.board)return `<p class="small center" style="margin-top:14px">Chargement du classement…</p>`;
+  const b=D.board;
+  if(!b.top.length)return `<h2>Classement du jour</h2><p class="small">Personne n'a encore joué aujourd'hui. Lance-toi le premier !</p>`;
+  return `<h2>Classement du jour <span class="small" style="font-family:var(--mono)">(${b.total} joueur${b.total>1?'s':''})</span></h2>
+  <div class="parch board">${b.top.map((r,i)=>`<div class="brow${r.me?' me':''}"><span class="rk">${i+1}</span><span class="ps">${escH(r.pseudo)}</span><span class="ln">${r.len} tuiles · ${fmtTime(r.ms)}</span><span class="sc num-font">${fmt(r.score)}</span></div>`).join('')}</div>`;
+}
+function vDaily(){
+  const P=D.P;
+  const head=`<div class="hdr"><span class="manche">Défi du jour <small>#${P.num}</small></span><span class="spacer"></span>${D.phase==='play'?`<span class="dtimer num-font${dailyLeft()<30000?' low':''}" id="dtimer">${fmtTime(dailyLeft())}</span>`:`<button class="btn small" data-a="tomenu">Menu</button>`}</div>`;
+  if(D.phase==='intro'){
+    return head+`<div class="parch rules" style="margin-top:10px">
+      <p><b>Même défi pour tout le monde.</b> Mêmes tuiles et même cible pour tous les joueurs, jusqu'à minuit.</p>
+      <p><b>3 minutes au chrono.</b> Valide autant de calculs que tu veux : ton meilleur score est retenu. Les tuiles ne s'usent pas, chaque calcul repart de la main complète.</p>
+      <p><b>Classement au score</b> (Base × Multi, bonus compris). À égalité, le plus rapide passe devant.</p>
+      <p style="margin:0;color:var(--red);font-family:var(--hand);font-size:17px">Un seul essai par jour : le chrono démarre dès que tu lances.</p></div>
+      <label class="plabel" for="pseudo">Ton pseudo pour le classement</label>
+      <input class="pinput" id="pseudo" maxlength="16" autocomplete="nickname" value="${escH(getPseudo())}" placeholder="2 à 16 caractères">
+      <button class="btn primary wide" style="margin-top:14px;padding:15px;font-size:20px" data-a="dstart">Lancer le chrono (3 min)</button>
+      ${boardHTML()}`;
+  }
+  if(D.phase==='play'){
+    const used=new Set(D.expr.filter(t=>t.t==='num').map(t=>t.i)),usedO=new Set(D.expr.filter(t=>t.t==='op').map(t=>t.i));
+    const toks=dToks(),v=PileShared.evalTokens(toks);let prev='<span class="small" style="font-family:var(--hand);font-size:16px">Écris ton calcul, valide, recommence : ton meilleur score compte.</span>',ok=false,est='';
+    if(D.expr.length){
+      if(!v)prev='<span class="small">…</span>';
+      else if(v.d!==1)prev=`<span class="res">= ${String((v.n/v.d).toFixed(2)).replace('.',',')}</span> <span class="small">pas entier</span>`;
+      else if(v.n<=0)prev=`<span class="res">= ${v.n}</span> <span class="small">doit être positif</span>`;
+      else{ok=true;const e=Math.abs(v.n-P.target);prev=`<span class="res num-font">= ${fmt(v.n)}</span> ${e===0?'<span style="color:var(--good)">pile !</span>':e<=10?`à ${e} près`:'<span style="color:var(--red)">hors cible</span>'}`;est=dailyEstim(v.n)}
+    }
+    const tk=D.expr.map((t,i)=>{const fr=(ui.fresh&&i===D.expr.length-1)?' fresh':'';
+      if(t.t==='num'){const n=P.nums[t.i];return `<span class="tok${n%2?' odd':''}${fr}" data-a="drm" data-i="${i}">${n}</span>`}
+      if(t.t==='op')return `<span class="tok op${fr}" data-a="drm" data-i="${i}">${P.ops[t.i]}</span>`;
+      return `<span class="tok par${fr}" data-a="drm" data-i="${i}">${t.t}</span>`}).join('');
+    ui.fresh=false;
+    return head+`
+    <div class="meta" style="margin-top:2px"><span>MEILLEUR <b class="num-font" id="dbest">${D.best?fmt(D.best.score):'—'}</b></span><span>${D.plays.length} calcul${D.plays.length>1?'s':''} validé${D.plays.length>1?'s':''}</span></div>
+    <div class="medal">${medalSVG()}<div class="inner"><div class="lbl">PIÈCE N°</div><div class="val num-font">${P.target}</div></div></div>
+    <div class="arch"><span class="cap">CALCUL</span><div class="exprbox${D.expr.length>11?' tight':''}">${tk||'<span class="ph">Ton calcul apparaît ici</span>'}</div></div>
+    <div class="preview">${prev}</div>${est}
+    <div class="row">${P.nums.map((n,i)=>`<button class="tile${n%2?' odd':''}${used.has(i)?' used':''}" data-a="dn" data-i="${i}">${n}${n%2?'<span class="odd-dot"></span>':''}</button>`).join('')}</div>
+    <div class="row">${P.ops.map((o,i)=>`<button class="tile op${usedO.has(i)?' used':''}" data-a="do" data-i="${i}">${o}</button>`).join('')}</div>
+    <div class="tools"><button class="tool" data-a="dlp">(</button><button class="tool" data-a="drp">)</button><button class="tool" data-a="dbk">⌫</button></div>
+    <div class="actions"><button class="btn" data-a="dend">${ui.dconfirm?'Sûr ? Re-touche':'Terminer'}</button><button class="btn primary" data-a="dplay" ${ok?'':'disabled'}>Valider</button></div>
+    ${D.plays.length?`<h2>Tes calculs</h2><div class="parch">${D.plays.map(p=>`<div class="brow"><span class="ps" style="font-family:var(--hand)">${escH(p.str)}</span><span class="sc num-font">${fmt(p.score)}</span></div>`).join('')}</div>`:''}`;
+  }
+  const b=D.best;
+  return head+`
+  <div class="center" style="margin-top:8px"><div class="small" style="font-family:var(--mono);letter-spacing:2px">CIBLE ${P.target} · TON MEILLEUR SCORE</div>
+    <div class="total num-font" style="opacity:1;animation:none;margin:10px auto">${b?fmt(b.score):'0'}</div>
+    ${b?`<div class="hand" style="font-size:20px">${escH(b.str)}</div><div class="small">${b.len} tuiles · trouvé en ${fmtTime(b.ms)}</div>`:'<div class="small">Aucun calcul validé.</div>'}
+    ${D.rank?`<p class="hand" style="font-size:22px;margin:12px 0 0">Tu es <span style="color:var(--red)">${D.rank}${D.rank===1?'er':'e'}</span> sur ${D.total}</p>`:''}
+  </div>
+  <div class="actions" style="margin-top:16px"><button class="btn" data-a="tomenu">Menu</button><button class="btn primary" data-a="dshare">Partager</button></div>
+  ${boardHTML()}
+  <p class="small center" style="margin-top:16px">Nouveau défi demain à minuit.</p>`;
+}
+function dailyShare(){
+  const b=D.best;const txt=`Pile · Défi du jour #${D.P.num}\nCible ${D.P.target} : ${b?fmt(b.score):0} points${b?` en ${b.len} tuiles`:''}${D.rank?` · ${D.rank}${D.rank===1?'er':'e'} sur ${D.total}`:''}\npile.ayoubgames.com`;
+  try{navigator.clipboard.writeText(txt).then(()=>flash('Résultat copié, colle-le où tu veux !'),()=>flash(txt))}catch(e){flash(txt)}
+}
+
 /* ================== TUTO ================== */
 function exprIs(v,n){if(!R)return false;const x=evaluate(R.expr);return !!x&&x.d===1&&x.n===v&&R.expr.filter(t=>t.t==='num').length>=n}
 const TUTO=[
@@ -940,7 +1215,7 @@ function tutoUpdate(){
   const box=document.getElementById('coach');if(!box)return;
   document.querySelectorAll('.coach-hl').forEach(e=>e.classList.remove('coach-hl'));
   if(!ui.tuto){box.classList.remove('on');return}
-  if(!R||screen==='over'||screen==='menu'||screen==='victory'){endTuto();return}
+  if(!R||screen==='over'||screen==='menu'||screen==='victory'||screen==='daily'){endTuto();return}
   let guard=0;
   while(guard++<20){const st=TUTO[ui.tuto.i];if(!st){endTuto();return}
     if(st.skipIf&&st.skipIf()){ui.tuto.i++;continue}
@@ -979,12 +1254,24 @@ $app.addEventListener('click',e=>{
   const el=e.target.closest('[data-a]');if(!el)return;
   const a=el.dataset.a,id=el.dataset.id;
   if(a!=='abandon')ui.confirmAbandon=false;
+  if(a!=='dend')ui.dconfirm=false;
   if(a!=='sell')ui.sellConfirm=null;
   switch(a){
     case 'new':audio();newRun();break;
     case 'resume':audio();resumeRun();break;
     case 'tuto':audio();startTuto();break;
-    case 'tomenu':R=null;screen='menu';render();break;
+    case 'daily':audio();openDaily();break;
+    case 'dstart':dailyStart();break;
+    case 'dn':dAdd({t:'num',i:+el.dataset.i});break;
+    case 'do':dAdd({t:'op',i:+el.dataset.i});break;
+    case 'dlp':dAdd({t:'('});break;
+    case 'drp':dAdd({t:')'});break;
+    case 'dbk':D.expr.pop();tock(420,0.05,0.06);render();break;
+    case 'drm':D.expr.splice(+el.dataset.i,1);tock(420,0.05,0.06);render();break;
+    case 'dplay':dailyPlay();break;
+    case 'dend':if(ui.dconfirm)dailyFinish();else{ui.dconfirm=true;render()}break;
+    case 'dshare':dailyShare();break;
+    case 'tomenu':R=null;clearInterval(dTick);screen='menu';render();break;
     case 'codex':if(screen!=='codex'&&screen!=='rules')ui.back=screen;screen='codex';render();break;
     case 'rules':if(screen!=='codex'&&screen!=='rules')ui.back=screen;screen='rules';render();break;
     case 'back':screen=ui.back||'menu';render();break;
@@ -1015,6 +1302,19 @@ $app.addEventListener('click',e=>{
   }
 });
 document.addEventListener('keydown',e=>{
+  if(screen==='daily'&&D&&D.phase==='play'){
+    if(e.target&&e.target.tagName==='INPUT')return;
+    const k=e.key,P=D.P;
+    if(/^[1-9]$/.test(k)){const i=P.nums.findIndex((v,j)=>v===+k&&!D.expr.some(t=>t.t==='num'&&t.i===j));if(i>=0)dAdd({t:'num',i});return}
+    const map={'+':'+','-':'−','*':'×','x':'×','/':'÷'};
+    if(map[k]){const i=P.ops.findIndex((o,j)=>o===map[k]&&!D.expr.some(t=>t.t==='op'&&t.i===j));if(i>=0)dAdd({t:'op',i});return}
+    if(k==='('||k===')'){dAdd({t:k});return}
+    if(k==='Backspace'){e.preventDefault();D.expr.pop();render();return}
+    if(k==='Escape'){D.expr=[];render();return}
+    if(k==='Enter'){e.preventDefault();const v=PileShared.evalTokens(dToks());if(v&&v.d===1&&v.n>0)dailyPlay();return}
+    return;
+  }
+  if(screen==='daily'&&D&&D.phase==='intro'&&e.key==='Enter'&&e.target&&e.target.id==='pseudo'){e.preventDefault();dailyStart();return}
   if(screen!=='game'||!R||ui.bag)return;
   if(ui.bossIntro){if(e.key==='Enter'||e.key===' '){e.preventDefault();ui.bossIntro=false;render()}return}
   if(R.pending){if(e.key==='Enter'||e.key===' '){e.preventDefault();cont()}return}
